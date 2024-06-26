@@ -1,6 +1,8 @@
 
 import os
 import logging
+import cv2
+import json
 import numpy as np
 import skimage.color
 import skimage.io
@@ -159,154 +161,89 @@ class Dataset(object):
         class_ids = np.empty([0], np.int32)
         return mask, class_ids
 
-class PhoSimDataset(Dataset):
+class GalaxyDataset(Dataset):
+    
+    def __getitem__(self, idx):
+        pass
+        # image = self.load_image(image_id)
+        # mask, class_ids = dataset.load_mask(image_id)
 
-    def __init__(self, height=512, width=512, stretch=0.005, Q=10, m=0):
-        self.height = height
-        self.width = width
-        # Contrast scaling parameters
-        self.stretch = stretch
-        self.Q = Q
-        self.m = m
-        super(PhoSimDataset, self).__init__()
+    def load_galaxia(self, dataset_dir, subset, class_mapping):
+        """Load a subset of the galaxyzoo dataset.
+        dataset_dir: Root directory of the dataset.
+        subset: Subset to load: train, val or test
+        """
+        # Add classes
+        for cls, id in class_mapping.items():
+            self.add_class("galaxia", id, cls)
 
+        assert subset in ["train", "val", "test"]
 
-    def load_sources(self, set_dir, dataset="validation", normalize="zscore", store_raw=False):
-        # Load sources in dataset with proper id
-        # This happens once, upon calling dataset.prepare()
-        self.dataset = dataset
-        self.out_dir = set_dir
-        # load specifications for image Dataset
-        # follows load_shapes example
-        black = (0,0,0)
-        # add DES classes
-        self.add_class("des", 1, "star")
-        self.add_class("des", 2, "galaxy")
+        dataset = json.load(open(os.path.join(dataset_dir, "galaxy_"+subset+".json")))
+        dataset = list(dataset.values())
 
-        # find number of sets:
-        num_sets = 0
-        for setdir in os.listdir(self.out_dir):
-            if 'set_' in setdir:
-                # add tranining image set
-                self.add_image("des", image_id=num_sets,path=os.path.join(self.out_dir,set_dir),
-                    width=self.width,height=self.height,bg_color=black)
-                num_sets += 1
+        # Skip unannotated images.
+        dataset = [a for a in dataset if a['regions']]
 
-        # store data in memory
-        self.images = [None]*(num_sets)
-        if store_raw:
-            self.raws = [None]*(num_sets)
-
-        self.masks = [None]*num_sets
-        self.class_ids_mem = [None]*num_sets
-        threads = np.clip(mp.cpu_count(),1,num_sets)
-        print("Loading images from disk.")
-        pool = ThreadPool(threads)
-        pool.starmap(self.load_image_disk, [(i, normalize, store_raw) for i in range(num_sets)])
-        if dataset == "training" or dataset == "validation":
-            print("Loading masks from disk (this may take several minutes).")
-            pool.map(self.load_mask_disk, range(num_sets))
-        pool.close()
-        pool.join()
-        return
-
-    def load_image(self, image_id, raw = False):
-        if raw:
-            return self.raws[image_id]
-        else:
-            return self.images[image_id]
-
-    def load_image_disk(self, image_id, normalize='zscore', store_raw = False):
-        # load from disk -- each set directory contains seperate files for images and masks
-        info = self.image_info[image_id]
-        setdir = 'set_%d' % image_id
-        # read images
-        g = getdata(os.path.join(self.out_dir,setdir,"img_g.fits"),memmap=False)
-        r = getdata(os.path.join(self.out_dir,setdir,"img_r.fits"),memmap=False)
-        z = getdata(os.path.join(self.out_dir,setdir,"img_z.fits"),memmap=False)
-
-        image = np.zeros([info['height'], info['width'], 3], dtype=np.int16)
-
-        # store raw image
-        if store_raw:
-            image_raw = np.zeros([info['height'], info['width'], 3], dtype=np.float64)
+        # Add images
+        for galxy_obj in dataset:
             
-            image_raw[:,:,0] = z # red
-            image_raw[:,:,1] = r # green
-            image_raw[:,:,2] = g # blue
-            self.raws[image_id] = image_raw
+            # The dataset can have more than just one object per image
+            if type(galxy_obj['regions']) is dict:
+                polygons = [r['shape_attributes'] for r in galxy_obj['regions'].values()]
+                objects = [s['region_attributes'] for s in galxy_obj['regions'].values()]
+            else:
+                polygons = [r['shape_attributes'] for r in galxy_obj['regions']]
+                objects = [s['region_attributes'] for s in galxy_obj['regions']]
+                        
+            class_ids = []
+            
+            # Add the ids according to the class_mapping
+            for obj in objects:
+                class_ids.append(class_mapping[obj["object_name"]])            
+            
+            # load_mask() needs the image size to convert polygons to masks.
+            image_path = os.path.join(dataset_dir, "original/zoo2Main", galxy_obj['filename'])
+            image = skimage.io.imread(image_path)
+            height, width = image.shape[:2]
 
-        # Contrast scaling / normalization
-        I = (z+r+g)/3.0
-        stretch = self.stretch
-        Q = self.Q
-        m = self.m
-
-        if normalize == 'lupton':
-            z = z*np.arcsinh(stretch*Q*(I - m))/(Q*I)
-            r = r*np.arcsinh(stretch*Q*(I - m))/(Q*I)
-            g = g*np.arcsinh(stretch*Q*(I - m))/(Q*I)
-        elif normalize == 'zscore':
-            Isigma = I*np.mean([np.std(g),np.std(r),np.std(z)])
-            z = (z - np.mean(z) - m)/Isigma
-            r = (r - np.mean(r) - m)/Isigma
-            g = (g - np.mean(g) - m)/Isigma
-        elif normalize == 'linear':
-            z = (z - m)/I
-            r = (r - m)/I
-            g = (g - m)/I
-
-        max_RGB = np.percentile([z,r,g], 99.995)
-        # avoid saturation
-        r = r/max_RGB; g = g/max_RGB; z = z/max_RGB
-
-        # Rescale to 16-bit int
-        int16_max = np.iinfo(np.int16).max
-        r = r * int16_max
-        g = g * int16_max
-        z = z * int16_max
-
-        image[:,:,0] = z # red
-        image[:,:,1] = r # green
-        image[:,:,2] = g # blue
-        self.images[image_id] = image
-        return image
+            self.add_image(
+                "galaxia",
+                image_id=galxy_obj['filename'],  # use file name as a unique image id
+                path=image_path,
+                width=width, height=height,
+                polygons=polygons,
+                class_ids=class_ids)
 
     def load_mask(self, image_id):
-        return self.masks[image_id], self.class_ids_mem[image_id]
-
-    def load_mask_disk(self, image_id):
-        # Load from disk
+        """Generate instance masks for an image.
+       Returns:
+        masks: A bool array of shape [height, width, instance count] with
+            one mask per instance.
+        class_ids: a 1D array of class IDs of the instance masks.
+        """
+        # If not a galaxia dataset image, delegate to parent class.
+        image_info = self.image_info[image_id]
+        if image_info["source"] != "galaxia":
+            return super(self.__class__, self).load_mask(image_id)
+        
+        class_ids = image_info['class_ids']
+        # Convert polygons to a bitmap mask of shape [height, width, instance_count]
         info = self.image_info[image_id]
-        # load image set via image_id from phosim output directory
-        setdir = 'set_%d' % image_id
-        maskdir = os.path.join(self.out_dir,setdir,"masks.fits")
-        with fits.open(maskdir,memmap=False,lazy_load_hdus=False) as hdul:
-            sources = len(hdul)
-            data = [hdu.data/np.max(hdu.data) for hdu in hdul]
-            class_ids = [hdu.header["CLASS_ID"] for hdu in hdul]
-        # make mask from threshold
-        thresh = [0.005 if i == 1 else 0.08 for i in class_ids]
-        masks = np.zeros([info['height'], info['width'], sources],dtype=np.uint8)
-        for i in range(sources):
-            """
-            # inital guess
-            x0, y0 = np.unravel_index(np.argmax(data[i]), masks.shape)
-            sma = 10 # semi-major axis
-            eps = 0 # ellipticity
-            g = EllipseGeometry(x0, y0, sma, eps, pa)
-            ellipse = Ellipse(data, geometry=g)
-            isolist = ellipse.fit_image()
-            # convert Petrosian isophot to mask
-            position = [isolist.x0, isolist.y0]
-            sma = isolist.sma
-            b = sma*np.sqrt(1-isolist.eps**2)
-            aper = EllipticalAperture(position, sma, b, isolist.pa)
-            # create mask
-            masks[:,:,i] = aper.to_mask(method='subpixel')
-            """
-            masks[:,:,i][data[i]>thresh[i]] = 1
-            masks[:,:,i] = cv2.GaussianBlur(masks[:,:,i],(9,9),2)
-        self.class_ids_mem[image_id] = np.array(class_ids,dtype=np.uint8)
-        self.masks[image_id] = np.array(masks,dtype=bool)
-        return self.masks[image_id], self.class_ids_mem[image_id]
+        mask = np.zeros([info["height"], info["width"], len(info["polygons"])],
+                        dtype=np.uint8)
+        for i, p in enumerate(info["polygons"]):
+            # Get indexes of pixels inside the polygon and set them to 1
+            rr, cc = skimage.draw.polygon(p['all_points_y'], p['all_points_x'])
+            mask[rr, cc, i] = 1
+            
+        class_ids = np.array(class_ids, dtype=np.int32)
+        return mask, class_ids
+
+    def image_reference(self, image_id):
+        """Return the path of the image."""
+        info = self.image_info[image_id]
+        if info["source"] == "galaxia":
+            return info["path"]
+        else:
+            super(self.__class__, self).image_reference(image_id)
