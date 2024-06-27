@@ -14,10 +14,10 @@ def plot_distribution(distributions, labels):
 def display_n_samples(dataset, n):
     """Call display_top_masks over n images
     """
-    image_ids = np.random.choice(dataset.image_ids, n)
-    for image_id in image_ids:
-        image = dataset.load_image(image_id)
-        mask, class_ids = dataset.load_mask(image_id)
+    images = np.random.choice(dataset.image_info, n)
+    for image_obj in images:
+        image = dataset.load_image(image_obj)
+        mask, class_ids = dataset.load_mask(image_obj)
         display_top_masks(image, mask, class_ids, dataset.class_names)
 
 def display_images(images, titles=None, cols=4, cmap=None, norm=None,

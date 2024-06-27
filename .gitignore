@@ -3,3 +3,4 @@
 /dataset/original/gz2_hart16.csv
 /dataset/galaxy_segment_classes.json
 **/__pycache__/
+/.vscode/
