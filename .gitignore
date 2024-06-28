@@ -1,6 +1,7 @@
 /misc/
 /dataset/original/zoo2Main/
 /dataset/original/gz2_hart16.csv
+/dataset/original/galaxy_segment.json
 /dataset/galaxy_segment_classes.json
 **/__pycache__/
 /.vscode/

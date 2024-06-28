@@ -1,6 +1,4 @@
-
 import os
-import logging
 import torch
 import json
 import numpy as np
@@ -8,21 +6,18 @@ import skimage.color
 import skimage.io
 import skimage.transform
 import multiprocessing as mp
-from multiprocessing.dummy import Pool as ThreadPool
 from torch.utils.data import Dataset
-from astropy.io.fits import getdata
-from astropy.io import fits
 
 
 class GalaxyDataset(Dataset):
-    def __init__(self, dataset_dir, subset, class_mapping, processor):
+    def __init__(self, dataset_dir, subset, processor, cls_mapping_path):
         self.dataset_dir = dataset_dir
         self.subset = subset
-        self.class_mapping = class_mapping
         self.image_info = []
-        self.dataset_classes = [{'source': '', 'id': 0, 'name': 'BG'}]  # Background class is always present
+        self.dataset_classes = []
         self.processor = processor
-        self.load_galaxia(dataset_dir, subset, class_mapping)
+        self.class_mapping = self.load_cls_mapping(cls_mapping_path)
+        self.load_galaxia(dataset_dir, subset)
     
     def __len__(self):
         return len(self.image_info)
@@ -55,15 +50,28 @@ class GalaxyDataset(Dataset):
 
     @property
     def class_names(self):
-        return [el["name"] for el in self.dataset_classes]
+        return list(self.class_mapping.values())
 
-    def load_galaxia(self, dataset_dir, subset, class_mapping):
+    @property
+    def reverse_class_mapping(self):
+        """From names to ids"""
+        return {y: x for x, y in self.class_mapping.items()}
+
+    def load_cls_mapping(self, cls_mapping_path):
+        with open(cls_mapping_path) as fp:
+            d = json.load(fp)
+
+        class_mapping = {k:v["name"] for k,v in d.items()}
+        assert class_mapping != {}
+        return class_mapping
+
+    def load_galaxia(self, dataset_dir, subset):
         """Load a subset of the galaxyzoo dataset.
         dataset_dir: Root directory of the dataset.
         subset: Subset to load: train, val or test
         """
         # Add classes
-        for cls, id in class_mapping.items():
+        for cls, id in self.class_mapping.items():
             self.add_class("galaxia", id, cls)
 
         assert subset in ["train", "val", "test"]
@@ -89,7 +97,7 @@ class GalaxyDataset(Dataset):
             
             # Add the ids according to the class_mapping
             for obj in objects:
-                class_ids.append(class_mapping[obj["object_name"]])            
+                class_ids.append(self.reverse_class_mapping[obj["object_name"]])            
             
             # load_mask() needs the image size to convert polygons to masks.
             image_path = os.path.join(dataset_dir, "original/zoo2Main", galxy_obj['filename'])

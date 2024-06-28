@@ -5,17 +5,12 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 MAIN_PROJECT_DIR = os.path.abspath(os.path.join(current_dir, os.pardir))
 DATASET_DIR = os.path.join(MAIN_PROJECT_DIR, 'dataset')
 
-CLASS_MAPPING = {
-    'Ei': 'E', 'Er': 'E', 'Ec': 'E',
-    'Sa': 'S', 'Sb': 'S', 'Sc': 'S', 'Sd': 'S',
-    'SBa': 'SB', 'SBb': 'SB', 'SBc': 'SB', 'SBd': 'SB',
-    'Sen': 'Se', 'Ser': 'Se', 'Seb': 'Se'
-}
+CLASS_INFO_PATH = os.path.join(MAIN_PROJECT_DIR, 'class_info.json')
 
-CLASS_TO_ID = {
-    'E': 1,
-    'S': 2,
-    'SB': 3,
-    'Se': 4,
-    'A': 5
+CLASS_MAPPING = {
+    'Ei': 'elliptical', 'Er': 'elliptical', 'Ec': 'elliptical',
+    'Sa': 'spiral', 'Sb': 'spiral', 'Sc': 'spiral', 'Sd': 'spiral',
+    'SBa': 'spiral barred', 'SBb': 'spiral barred', 'SBc': 'spiral barred', 'SBd': 'spiral barred',
+    'Sen': 'spiral edge-on', 'Ser': 'spiral edge-on', 'Seb': 'spiral edge-on',
+    'A': 'artifact'
 }

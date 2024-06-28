@@ -1,0 +1,8 @@
+{
+    "0": {"isthing": 0, "name": "background"},
+    "1": {"isthing": 1, "name": "elliptical"},
+    "2": {"isthing": 1, "name": "spiral"},
+    "3": {"isthing": 1, "name": "spiral barred"},
+    "4": {"isthing": 1, "name": "spiral edge-on"},
+    "5": {"isthing": 1, "name": "artifact"}
+}
