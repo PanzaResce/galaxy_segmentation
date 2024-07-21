@@ -10,13 +10,15 @@ from torch.utils.data import Dataset
 
 
 class GalaxyDataset(Dataset):
-    def __init__(self, dataset_dir, subset, processor, cls_mapping_path):
-        self.dataset_dir = dataset_dir
-        self.subset = subset
+    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform):
         self.image_info = []
         self.dataset_classes = []
+
+        self.dataset_dir = dataset_dir
+        self.subset = subset
         self.processor = processor
         self.class_mapping = self.load_cls_mapping(cls_mapping_path)
+        self.transform = transform
         self.load_galaxia(dataset_dir, subset)
     
     def __len__(self):
@@ -29,13 +31,21 @@ class GalaxyDataset(Dataset):
         
         # Prepare task inputs
         task_inputs = ["semantic"]
+        
+        # Apply transform augmentation
+        if self.transform:
+            transformed = self.transform(image=image, mask=mask)
+            transformed_image = transformed['image']
+            transformed_mask = transformed['mask']
 
         # Apply the processor to the image and masks
         encoded_inputs = self.processor(
-            images=image,
+            images=transformed_image,
             task_inputs=task_inputs,
-            segmentation_maps=np.squeeze(mask),     # squeeze is necessary because the image processor expect ndims=2
-            return_tensors="pt"
+            segmentation_maps=np.squeeze(transformed_mask),     # squeeze is necessary because the image processor expect ndims=2
+            return_tensors="pt",
+            image_mean=image.mean(axis=(0,1)),
+            image_std=image.std(axis=(0,1))
         )
         
         # Extract the required outputs
@@ -46,7 +56,16 @@ class GalaxyDataset(Dataset):
         
         # return binary_masks, labels, text_inputs, task_inputs
         inputs = {k:v.squeeze() if isinstance(v, torch.Tensor) else v[0] for k,v in encoded_inputs.items()}
+        # self.type_conversion(inputs)
         return inputs
+
+    def get_unorm_image(self, idx):
+        image = self.__getitem__(idx)["pixel_values"]
+        original_image = skimage.io.imread(self.image_info[idx]["path"])
+        image_average = original_image.mean(axis=(0,1))
+        image_std = original_image.std(axis=(0,1))
+        unnormalized_image = (image.numpy() * np.array(image_std)[:, None, None]) + np.array(image_average)[:, None, None]
+        return np.moveaxis(unnormalized_image, 0, -1).astype(np.uint8)
 
     @property
     def class_names(self):
@@ -111,6 +130,16 @@ class GalaxyDataset(Dataset):
                 width=width, height=height,
                 polygons=polygons,
                 class_ids=class_ids)
+
+
+    @staticmethod
+    def type_conversion(encoded_inputs):
+        """Convert statically the dtype of the encoded_inputs fields"""
+        encoded_inputs["pixel_values"] = encoded_inputs["pixel_values"].to(torch.float16)
+        encoded_inputs["pixel_mask"] = encoded_inputs["pixel_mask"].to(torch.int16)
+        encoded_inputs["mask_labels"] = encoded_inputs["mask_labels"].to(torch.float16)
+        encoded_inputs["class_labels"] = encoded_inputs["class_labels"].to(torch.int16)
+
 
     def load_image(self, image_obj):
         """Load the specified image and return a [H,W,3] Numpy array.
