@@ -14,3 +14,6 @@ CLASS_MAPPING = {
     'Sen': 'spiral edge-on', 'Ser': 'spiral edge-on', 'Seb': 'spiral edge-on',
     'A': 'artifact'
 }
+
+GALAXY_MEAN = [8.9483, 6.2549, 5.1239]
+GALAXY_STD = [14.9211, 12.5903, 8.8366]

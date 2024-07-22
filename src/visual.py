@@ -13,7 +13,7 @@ def plot_distribution(distributions, labels):
     plt.show()
 
 def display_n_samples(dataset, n):
-    """Call display_top_masks over n images
+    """Call display_top_masks over n images, not normalized
     """
     images = np.random.choice(dataset.image_info, n)
     for image_obj in images:

@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 
 
 class GalaxyDataset(Dataset):
-    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform):
+    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform, mean, std):
         self.image_info = []
         self.dataset_classes = []
 
@@ -19,6 +19,8 @@ class GalaxyDataset(Dataset):
         self.processor = processor
         self.class_mapping = self.load_cls_mapping(cls_mapping_path)
         self.transform = transform
+        self.mean = mean
+        self.std = std
         self.load_galaxia(dataset_dir, subset)
     
     def __len__(self):
@@ -44,8 +46,8 @@ class GalaxyDataset(Dataset):
             task_inputs=task_inputs,
             segmentation_maps=np.squeeze(transformed_mask),     # squeeze is necessary because the image processor expect ndims=2
             return_tensors="pt",
-            image_mean=image.mean(axis=(0,1)),
-            image_std=image.std(axis=(0,1))
+            image_mean=self.mean,
+            image_std=self.std
         )
         
         # Extract the required outputs
@@ -98,7 +100,7 @@ class GalaxyDataset(Dataset):
         dataset = json.load(open(os.path.join(dataset_dir, "galaxy_"+subset+".json")))
         dataset = list(dataset.values())
 
-        # Skip unannotated images.
+        # Skip unannotated images
         dataset = [a for a in dataset if a['regions']]
 
         # Add images
@@ -116,7 +118,7 @@ class GalaxyDataset(Dataset):
             
             # Add the ids according to the class_mapping
             for obj in objects:
-                class_ids.append(self.reverse_class_mapping[obj["object_name"]])            
+                class_ids.append(self.reverse_class_mapping[obj["object_name"]])
             
             # load_mask() needs the image size to convert polygons to masks.
             image_path = os.path.join(dataset_dir, "original/zoo2Main", galxy_obj['filename'])
@@ -170,9 +172,9 @@ class GalaxyDataset(Dataset):
         mask = np.zeros([image_info["height"], image_info["width"], len(image_info["polygons"])],
                         dtype=np.uint8)
         for i, p in enumerate(image_info["polygons"]):
-            # Get indexes of pixels inside the polygon and set them to 1
+            # Get indexes of pixels inside the polygon and set them to class_id
             rr, cc = skimage.draw.polygon(p['all_points_y'], p['all_points_x'])
-            mask[rr, cc, i] = 1
+            mask[rr, cc, i] = class_ids[i]
             
         class_ids = np.array(class_ids, dtype=np.int32)
         return mask, class_ids
