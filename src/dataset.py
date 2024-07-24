@@ -12,6 +12,8 @@ from torch.utils.data import Dataset
 class GalaxyDataset(Dataset):
     def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform, mean, std):
         self.image_info = []
+        self.image_data = []
+        self.mask_data = []
         self.dataset_classes = []
 
         self.dataset_dir = dataset_dir
@@ -27,9 +29,8 @@ class GalaxyDataset(Dataset):
         return len(self.image_info)
 
     def __getitem__(self, idx):
-        image_info = self.image_info[idx]
-        image = skimage.io.imread(image_info['path'])
-        mask, class_ids = self.load_mask(image_info)
+        image = self.image_data[idx]
+        mask = self.mask_data[idx]
         
         # Prepare task inputs
         task_inputs = ["semantic"]
@@ -158,15 +159,9 @@ class GalaxyDataset(Dataset):
 
     def load_mask(self, image_info):
         """Generate instance masks for an image.
-       Returns:
-        masks: A bool array of shape [height, width, instance count] with
-            one mask per instance.
-        class_ids: a 1D array of class IDs of the instance masks.
-        """
-        # If not a galaxia dataset image, delegate to parent class.
-        if image_info["source"] != "galaxia":
-            return super(self.__class__, self).load_mask(image_info)
-        
+        Returns:
+            masks: A bool array of shape [height, width, instance count] with one mask per instance.
+        """        
         class_ids = image_info['class_ids']
         # Convert polygons to a bitmap mask of shape [height, width, instance_count]
         mask = np.zeros([image_info["height"], image_info["width"], len(image_info["polygons"])],
@@ -204,4 +199,6 @@ class GalaxyDataset(Dataset):
         }
         image_info.update(kwargs)
         self.image_info.append(image_info)
+        self.image_data.append(skimage.io.imread(image_info["path"]))
+        self.mask_data.append(self.load_mask(image_info))
 
