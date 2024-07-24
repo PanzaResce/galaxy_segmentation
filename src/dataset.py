@@ -171,8 +171,7 @@ class GalaxyDataset(Dataset):
             rr, cc = skimage.draw.polygon(p['all_points_y'], p['all_points_x'])
             mask[rr, cc, i] = class_ids[i]
             
-        class_ids = np.array(class_ids, dtype=np.int32)
-        return mask, class_ids
+        return mask
 
     def image_reference(self, image_id):
         """Return the path of the image."""

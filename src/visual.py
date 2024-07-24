@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 def plot_distribution(distributions, labels):
     fig, axs = plt.subplots(1, len(distributions))
@@ -12,14 +13,30 @@ def plot_distribution(distributions, labels):
     plt.ylabel('Frequency')
     plt.show()
 
-def display_n_samples(dataset, n):
-    """Call display_top_masks over n images, not normalized
+def display_n_samples(dataset, n, from_dir=True):
     """
-    images = np.random.choice(dataset.image_info, n)
-    for image_obj in images:
-        image = dataset.load_image(image_obj)
-        mask, class_ids = dataset.load_mask(image_obj)
-        display_top_masks(image, mask, class_ids, dataset.class_names)
+    Call display_top_masks over n images
+    Args:
+        dataset: 
+            the dataset from which the image will be picked
+        n (int): 
+            how many samples to show
+        from_dir (bool): 
+            wether loading the image from the real directory or directly use the dataset output
+    """
+    if from_dir:
+        images = np.random.choice(dataset.image_info, n)
+        for image_obj in images:
+            image = dataset.load_image(image_obj)
+            mask = dataset.load_mask(image_obj)
+            class_ids = np.array([int(x) for x in image_obj["class_ids"]])
+            display_top_masks(image, mask, class_ids, dataset.class_names)
+    else:
+        idxs = np.random.choice(np.arange(len(dataset)), 3)
+        for idx in idxs:
+            el = dataset[idx]
+            display_images([el["pixel_values"].permute((1,2,0)), el["mask_labels"][1]], None, 2)
+        
 
 def display_images(images, titles=None, cols=4, cmap=None, norm=None,
                    interpolation=None):
@@ -39,8 +56,9 @@ def display_images(images, titles=None, cols=4, cmap=None, norm=None,
         plt.subplot(rows, cols, i)
         plt.title(title, fontsize=9)
         plt.axis('off')
-        plt.imshow(image.astype(np.uint8), cmap=cmap,
-                   norm=norm, interpolation=interpolation)
+        if isinstance(image, np.ndarray):
+            image = image.astype(np.uint8)
+        plt.imshow(image, cmap=cmap, norm=norm, interpolation=interpolation)
         i += 1
     plt.show()
     
@@ -50,7 +68,7 @@ def display_top_masks(image, mask, class_ids, class_names, limit=1):
     titles = []
     to_display.append(image)
     titles.append("H x W={}x{}".format(image.shape[0], image.shape[1]))
-    # Pick top prominent classes in this image
+
     unique_class_ids = np.unique(class_ids)
     mask_area = [np.sum(mask[:, :, np.where(class_ids == i)[0]])
                  for i in unique_class_ids]
