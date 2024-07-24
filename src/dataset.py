@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 
 
 class GalaxyDataset(Dataset):
-    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform, mean, std, max_obj=2):
+    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform, mean, std, load_on_demand=False, max_obj=2):
         self.image_info = []
         self.image_data = []
         self.mask_data = []
@@ -24,6 +24,7 @@ class GalaxyDataset(Dataset):
         self.transform = transform
         self.mean = mean
         self.std = std
+        self.load_on_demand = load_on_demand
         self.max_obj = max_obj      # maximum number of objects within a segmentation map
         self.load_galaxia(dataset_dir, subset)
     
@@ -31,8 +32,14 @@ class GalaxyDataset(Dataset):
         return len(self.image_info)
 
     def __getitem__(self, idx):
-        image = self.image_data[idx]
-        mask = self.mask_data[idx]
+        if self.load_on_demand:
+            image_info = self.image_info[idx]
+            image = skimage.io.imread(image_info['path'])
+            mask = self.load_mask(image_info)
+
+        else:
+            image = self.image_data[idx]
+            mask = self.mask_data[idx]
         
         # Prepare task inputs
         task_inputs = ["semantic"]
@@ -210,6 +217,7 @@ class GalaxyDataset(Dataset):
         }
         image_info.update(kwargs)
         self.image_info.append(image_info)
-        self.image_data.append(skimage.io.imread(image_info["path"]))
-        self.mask_data.append(self.load_mask(image_info))
+        if not self.load_on_demand:
+            self.image_data.append(skimage.io.imread(image_info["path"]))
+            self.mask_data.append(self.load_mask(image_info))
 
