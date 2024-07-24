@@ -6,11 +6,12 @@ import skimage.color
 import skimage.io
 import skimage.transform
 import multiprocessing as mp
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 
 class GalaxyDataset(Dataset):
-    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform, mean, std):
+    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform, mean, std, max_obj=2):
         self.image_info = []
         self.image_data = []
         self.mask_data = []
@@ -23,6 +24,7 @@ class GalaxyDataset(Dataset):
         self.transform = transform
         self.mean = mean
         self.std = std
+        self.max_obj = max_obj      # maximum number of objects within a segmentation map
         self.load_galaxia(dataset_dir, subset)
     
     def __len__(self):
@@ -60,6 +62,16 @@ class GalaxyDataset(Dataset):
         # return binary_masks, labels, text_inputs, task_inputs
         inputs = {k:v.squeeze() if isinstance(v, torch.Tensor) else v[0] for k,v in encoded_inputs.items()}
         # self.type_conversion(inputs)
+
+        """
+        It may happen that the rotation augmentation make some masks fall outside the input frame.
+        When this happens the segmentation map is empty (all background).
+        In this case we have to pad to the maximum number of elements that can be present within a single segmentation map.
+        """
+        dim = self.max_obj - inputs["mask_labels"].shape[0]
+        inputs["mask_labels"] = F.pad(inputs["mask_labels"], (0, 0, 0, 0, dim, 0), "constant", 1)
+        inputs["class_labels"] = F.pad(inputs["class_labels"], (0, dim), "constant", 0)
+        
         return inputs
 
     def get_unorm_image(self, idx):
