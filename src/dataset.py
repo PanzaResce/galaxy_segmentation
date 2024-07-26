@@ -16,6 +16,7 @@ class GalaxyDataset(Dataset):
         self.image_data = []
         self.mask_data = []
         self.dataset_classes = []
+        self.task = ["semantic"]
 
         self.dataset_dir = dataset_dir
         self.subset = subset
@@ -36,25 +37,30 @@ class GalaxyDataset(Dataset):
             image_info = self.image_info[idx]
             image = skimage.io.imread(image_info['path'])
             mask = self.load_mask(image_info)
-
         else:
             image = self.image_data[idx]
             mask = self.mask_data[idx]
-        
-        # Prepare task inputs
-        task_inputs = ["semantic"]
         
         # Apply transform augmentation
         if self.transform:
             transformed = self.transform(image=image, mask=mask)
             transformed_image = transformed['image']
             transformed_mask = transformed['mask']
+        else:
+            transformed_image = image
+            transformed_mask = mask
+
+        # squeeze is necessary because the image processor expect ndims=2
+        transformed_mask = np.squeeze(transformed_mask)
+
+        if self.subset == "test":
+            transformed_mask = None
 
         # Apply the processor to the image and masks
         encoded_inputs = self.processor(
             images=transformed_image,
-            task_inputs=task_inputs,
-            segmentation_maps=np.squeeze(transformed_mask),     # squeeze is necessary because the image processor expect ndims=2
+            task_inputs=self.task,
+            segmentation_maps=transformed_mask,     
             return_tensors="pt",
             image_mean=self.mean,
             image_std=self.std
@@ -75,11 +81,19 @@ class GalaxyDataset(Dataset):
         When this happens the segmentation map is empty (all background).
         In this case we have to pad to the maximum number of elements that can be present within a single segmentation map.
         """
-        dim = self.max_obj - inputs["mask_labels"].shape[0]
-        inputs["mask_labels"] = F.pad(inputs["mask_labels"], (0, 0, 0, 0, dim, 0), "constant", 1)
-        inputs["class_labels"] = F.pad(inputs["class_labels"], (0, dim), "constant", 0)
+        if self.subset != "test":
+            dim = self.max_obj - inputs["mask_labels"].shape[0]
+            inputs["mask_labels"] = F.pad(inputs["mask_labels"], (0, 0, 0, 0, dim, 0), "constant", 1)
+            inputs["class_labels"] = F.pad(inputs["class_labels"], (0, dim), "constant", 0)
         
         return inputs
+
+    def set_task(self, new_task):
+        valid_task = new_task == "semantic" or new_task == "instance" or new_task == "panoptic"
+        if valid_task:
+            self.task = [new_task]
+        else:
+            raise ValueError("Task must be one of [\"semantic\", \"instance\", \"panoptic\"]")
 
     def get_unorm_image(self, idx):
         image = self.__getitem__(idx)["pixel_values"]
