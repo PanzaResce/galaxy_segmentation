@@ -53,8 +53,8 @@ class GalaxyDataset(Dataset):
         # squeeze is necessary because the image processor expect ndims=2
         transformed_mask = np.squeeze(transformed_mask)
 
-        if self.subset == "test":
-            transformed_mask = None
+        # if self.subset == "test":
+        #     transformed_mask = None
 
         # Apply the processor to the image and masks
         encoded_inputs = self.processor(
@@ -65,14 +65,7 @@ class GalaxyDataset(Dataset):
             image_mean=self.mean,
             image_std=self.std
         )
-        
-        # Extract the required outputs
-        # binary_masks = encoded_inputs["pixel_values"]
-        # labels = torch.tensor(class_ids, dtype=torch.int64)
-        # text_inputs = encoded_inputs["text_inputs"]
-        # task_inputs = encoded_inputs["task_inputs"]
-        
-        # return binary_masks, labels, text_inputs, task_inputs
+
         inputs = {k:v.squeeze() if isinstance(v, torch.Tensor) else v[0] for k,v in encoded_inputs.items()}
         # self.type_conversion(inputs)
 
@@ -81,13 +74,44 @@ class GalaxyDataset(Dataset):
         When this happens the segmentation map is empty (all background).
         In this case we have to pad to the maximum number of elements that can be present within a single segmentation map.
         """
-        if self.subset != "test":
-            dim = self.max_obj - inputs["mask_labels"].shape[0]
-            inputs["mask_labels"] = F.pad(inputs["mask_labels"], (0, 0, 0, 0, dim, 0), "constant", 1)
-            inputs["class_labels"] = F.pad(inputs["class_labels"], (0, dim), "constant", 0)
-        
-        return inputs
+        dim = self.max_obj - inputs["mask_labels"].shape[0]
+        inputs["mask_labels"] = F.pad(inputs["mask_labels"], (0, 0, 0, 0, dim, 0), "constant", 1)
+        inputs["class_labels"] = F.pad(inputs["class_labels"], (0, dim), "constant", 0)
 
+        return inputs
+    
+    def get_gt_mask(self, processor_out):
+        """
+        Compute a ground truth mask based on the processor outputs.
+        The processor outputs a binary mask for each object, this method is needed to convert these into
+        a single mask. This makes it easier to use during metric computation.
+        """
+        obj_per_mask = None
+
+        if len(processor_out["mask_labels"].shape) == 4:
+            obj_per_mask = processor_out["mask_labels"].shape[1]
+            batched = True
+        if len(processor_out["mask_labels"].shape) == 3:
+            obj_per_mask = processor_out["mask_labels"].shape[0]
+            batched = False
+
+        if obj_per_mask != 2:
+            raise NotImplementedError(f"Method does not support mask containing more than 2 labels (background, object), found {obj_per_mask}")
+
+        if batched:
+            gt_mask = processor_out["mask_labels"][:, 1].long()
+            gt_mask[gt_mask == 1] = processor_out["class_labels"][:, 1].unsqueeze(-1).unsqueeze(-1).expand_as(gt_mask)[gt_mask == 1]
+            gt_mask[gt_mask == 0] = processor_out["class_labels"][:, 0].unsqueeze(-1).unsqueeze(-1).expand_as(gt_mask)[gt_mask == 0]
+
+            # gt_mask[processor_out["mask_labels"][:, 1] == 0] = processor_out["class_labels"][:, 0]
+        else:
+            gt_mask = processor_out["mask_labels"][1]
+            gt_mask[processor_out["mask_labels"][1] == 1] = processor_out["class_labels"][1]
+            gt_mask[processor_out["mask_labels"][1] == 0] = processor_out["class_labels"][0]
+        
+        return gt_mask
+        
+    
     def set_task(self, new_task):
         valid_task = new_task == "semantic" or new_task == "instance" or new_task == "panoptic"
         if valid_task:
