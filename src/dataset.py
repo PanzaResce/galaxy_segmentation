@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 
 
 class GalaxyDataset(Dataset):
-    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform, mean, std, load_on_demand=False, max_obj=2):
+    def __init__(self, dataset_dir, subset, processor, cls_mapping_path, transform, mean, std, load_on_demand=False, max_obj=2, subset_idx=None):
         self.image_info = []
         self.image_data = []
         self.mask_data = []
@@ -27,12 +27,12 @@ class GalaxyDataset(Dataset):
         self.std = std
         self.load_on_demand = load_on_demand
         self.max_obj = max_obj      # maximum number of objects within a segmentation map
-        self.load_galaxia(dataset_dir, subset)
+        self.load_galaxia(dataset_dir, subset, subset_idx)
     
     def __len__(self):
         return len(self.image_info)
 
-    def __getitem__(self, idx):
+    def process_single_item(self, idx):
         if self.load_on_demand:
             image_info = self.image_info[idx]
             image = skimage.io.imread(image_info['path'])
@@ -40,7 +40,7 @@ class GalaxyDataset(Dataset):
         else:
             image = self.image_data[idx]
             mask = self.mask_data[idx]
-        
+
         # Apply transform augmentation
         if self.transform:
             transformed = self.transform(image=image, mask=mask)
@@ -50,35 +50,36 @@ class GalaxyDataset(Dataset):
             transformed_image = image
             transformed_mask = mask
 
-        # squeeze is necessary because the image processor expect ndims=2
+        # Squeeze is necessary because the image processor expects ndims=2
         transformed_mask = np.squeeze(transformed_mask)
-
-        # if self.subset == "test":
-        #     transformed_mask = None
 
         # Apply the processor to the image and masks
         encoded_inputs = self.processor(
             images=transformed_image,
             task_inputs=self.task,
-            segmentation_maps=transformed_mask,     
+            segmentation_maps=transformed_mask,
             return_tensors="pt",
             image_mean=self.mean,
             image_std=self.std
         )
 
-        inputs = {k:v.squeeze() if isinstance(v, torch.Tensor) else v[0] for k,v in encoded_inputs.items()}
-        # self.type_conversion(inputs)
+        inputs = {k: v.squeeze() if isinstance(v, torch.Tensor) else v[0] for k, v in encoded_inputs.items()}
 
-        """
-        It may happen that the rotation augmentation make some masks fall outside the input frame.
-        When this happens the segmentation map is empty (all background).
-        In this case we have to pad to the maximum number of elements that can be present within a single segmentation map.
-        """
+        # Pad mask_labels and class_labels
         dim = self.max_obj - inputs["mask_labels"].shape[0]
         inputs["mask_labels"] = F.pad(inputs["mask_labels"], (0, 0, 0, 0, dim, 0), "constant", 1)
         inputs["class_labels"] = F.pad(inputs["class_labels"], (0, dim), "constant", 0)
 
         return inputs
+
+    def __getitem__(self, idx):
+        # Check if idx is a slice
+        if isinstance(idx, slice):
+            indices = range(len(self.image_info))[idx]
+            return [self.process_single_item(i) for i in indices]
+        else:
+            return self.process_single_item(idx)
+
     
     def get_gt_mask(self, processor_out):
         """
@@ -144,10 +145,12 @@ class GalaxyDataset(Dataset):
         assert class_mapping != {}
         return class_mapping
 
-    def load_galaxia(self, dataset_dir, subset):
-        """Load a subset of the galaxyzoo dataset.
-        dataset_dir: Root directory of the dataset.
-        subset: Subset to load: train, val or test
+    def load_galaxia(self, dataset_dir, subset, subset_idx):
+        """
+        Load a subset of the galaxyzoo dataset.
+            dataset_dir: Root directory of the dataset.
+            subset: Subset to load: train, val or test
+            subset_idx: load a subset of the dataset
         """
         # Add classes
         for cls, id in self.class_mapping.items():
@@ -157,6 +160,9 @@ class GalaxyDataset(Dataset):
 
         dataset = json.load(open(os.path.join(dataset_dir, "galaxy_"+subset+".json")))
         dataset = list(dataset.values())
+
+        if subset_idx != None:
+            dataset = dataset[:subset_idx]
 
         # Skip unannotated images
         dataset = [a for a in dataset if a['regions']]
