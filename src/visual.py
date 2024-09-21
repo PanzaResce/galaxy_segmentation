@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib.patches import Patch
 
 def plot_distribution(distributions, labels):
     fig, axs = plt.subplots(1, len(distributions))
@@ -83,3 +84,28 @@ def display_top_masks(image, mask, class_ids, class_names, limit=1):
         to_display.append(m)
         titles.append(class_names[class_id] if class_id != -1 else "-")
     display_images(to_display, titles=titles, cols=limit + 1, cmap="Blues_r")
+
+def mask_gt_overlap(gt_mask, pred_mask, id2label):
+    rgb = torch.zeros((3, 256, 256))
+    rgb[1, :,:] = torch.logical_and(gt_mask, pred_mask.cpu())
+    rgb[0, :,:] = torch.logical_and(gt_mask, torch.logical_not(pred_mask.cpu()))
+    rgb[2, :,:] = torch.logical_and(pred_mask.cpu(), torch.logical_not(gt_mask))
+
+    plt.figure(figsize=(6, 6))
+    plt.imshow(rgb.permute(1,2,0))
+    plt.title('Overlay of Ground Truth and Prediction Masks')
+    
+    gt_class = id2label[gt_mask[gt_mask != 0].unique().item()]
+    pred_class = id2label[pred_mask[pred_mask != 0].unique().item()]
+
+    legend_elements = [
+        Patch(facecolor='red', edgecolor='r', label='Ground Truth Only'),
+        Patch(facecolor='blue', edgecolor='b', label='Prediction Only'),
+        Patch(facecolor='green', edgecolor='g', label='Overlap'),
+        Patch(fill=False, edgecolor='none', label=f'GT: {gt_class}'),
+        Patch(fill=False, edgecolor='none', label=f'Predicted: {pred_class}')
+    ]
+
+    plt.legend(handles=legend_elements, loc='upper right', fontsize='x-small')
+    plt.axis('off')  
+    plt.show()
