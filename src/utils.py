@@ -3,6 +3,7 @@ import json
 import math
 import os
 from collections import Counter
+# from src.config import CLASS_INFO_PATH, MAIN_PROJECT_DIR
 from config import CLASS_INFO_PATH, MAIN_PROJECT_DIR
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LRScheduler
@@ -54,8 +55,7 @@ def compute_metrics(dataset, model, processor, device="cuda"):
     test_dataloader = DataLoader(dataset, batch_size=4, shuffle=False)
     
     model.to(device)
-    model.eval()
-    model.model.is_training = False
+    inference_mode(model)
 
     running_iou = 0.0
     running_dice = 0.0
@@ -65,7 +65,7 @@ def compute_metrics(dataset, model, processor, device="cuda"):
         gt_mask = dataset.get_gt_mask(batch)
 
         batch.pop("mask_labels", None)
-        batch.pop("text_inputs", None)
+        # batch.pop("text_inputs", None)
         batch = {k:v.to(device) for k,v in batch.items()}
         with torch.no_grad():
             outputs = model(**batch)
@@ -144,3 +144,23 @@ class WarmupPolyLR(LRScheduler):
     def _compute_values(self) -> List[float]:
         # The new interface
         return self.get_lr()
+
+
+# Used for the validation loop where I still need the loss
+def evaluation_mode(model):
+    model.eval()
+    for module in model.model.pixel_level_module.decoder.encoder.layers:
+        module.is_training = False
+
+# Used at test time, however it is still needed to remove mask_labels from the batches, otherwise it still tries to compute the loss (which fails)
+def inference_mode(model):
+    model.eval()
+    model.model.is_training = False
+    for module in model.model.pixel_level_module.decoder.encoder.layers:
+        module.is_training = False
+
+def training_mode(model):
+    model.train()
+    model.model.is_training = True
+    for module in model.model.pixel_level_module.decoder.encoder.layers:
+        module.is_training = True
