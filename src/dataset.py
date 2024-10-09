@@ -68,7 +68,7 @@ class GalaxyDataset(Dataset):
         # Pad mask_labels and class_labels
         dim = self.max_obj - inputs["mask_labels"].shape[0]
         inputs["mask_labels"] = F.pad(inputs["mask_labels"], (0, 0, 0, 0, dim, 0), "constant", 1)
-        inputs["class_labels"] = F.pad(inputs["class_labels"], (0, dim), "constant", 0)
+        inputs["class_labels"] = F.pad(inputs["class_labels"], (dim, 0), "constant", 0)
 
         return inputs
 
@@ -96,7 +96,7 @@ class GalaxyDataset(Dataset):
             obj_per_mask = processor_out["mask_labels"].shape[0]
             batched = False
 
-        if obj_per_mask != 2:
+        if obj_per_mask > 2:
             raise NotImplementedError(f"Method does not support mask containing more than 2 labels (background, object), found {obj_per_mask}")
 
         if batched:
