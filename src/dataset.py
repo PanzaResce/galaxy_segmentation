@@ -1,6 +1,7 @@
 import os
 import torch
 import json
+import random
 import numpy as np
 import skimage.color
 import skimage.io
@@ -16,7 +17,8 @@ class GalaxyDataset(Dataset):
         self.image_data = []
         self.mask_data = []
         self.dataset_classes = []
-        self.task = ["semantic"]
+        # default initialized to random so that the training is on both instance and semantic
+        self.task = "random"
 
         self.dataset_dir = dataset_dir
         self.subset = subset
@@ -53,10 +55,15 @@ class GalaxyDataset(Dataset):
         # Squeeze is necessary because the image processor expects ndims=2
         transformed_mask = np.squeeze(transformed_mask)
 
+        if self.task == "random":
+            cur_task = random.choice(("instance", "semantic"))
+        else:
+            cur_task = self.task
+
         # Apply the processor to the image and masks
         encoded_inputs = self.processor(
             images=transformed_image,
-            task_inputs=self.task,
+            task_inputs=[cur_task],
             segmentation_maps=transformed_mask,
             return_tensors="pt",
             image_mean=self.mean,
@@ -114,11 +121,11 @@ class GalaxyDataset(Dataset):
         
     
     def set_task(self, new_task):
-        valid_task = new_task == "semantic" or new_task == "instance" or new_task == "panoptic"
+        valid_task = new_task == "semantic" or new_task == "instance" or new_task == "panoptic" or new_task == "random"
         if valid_task:
-            self.task = [new_task]
+            self.task = new_task
         else:
-            raise ValueError("Task must be one of [\"semantic\", \"instance\", \"panoptic\"]")
+            raise ValueError("Task must be one of [\"semantic\", \"instance\", \"panoptic\", \"random\"]")
 
     def get_unorm_image(self, idx):
         image = self.__getitem__(idx)["pixel_values"]

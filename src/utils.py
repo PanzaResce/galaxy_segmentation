@@ -55,7 +55,7 @@ def compute_iou(gt_mask, pred_mask, class_label):
 
 def sliding_window(image, window_size, step_size):
     """Generates sliding window patches from the image."""
-    img_height, img_width = image.shape[:2]
+    img_width, img_height = image.shape[:2]
     window_height, window_width = window_size
     step_height, step_width = step_size
 
@@ -74,22 +74,26 @@ def extract_bounding_box(segmentation_map, offset=(0,0)):
     if object_coords.size(0) == 0:
         return None
     
-    y_min, x_min = torch.min(object_coords, dim=0)[0]
-    y_max, x_max = torch.max(object_coords, dim=0)[0]
+    y_min, x_min = torch.min(object_coords, dim=0).values
+    y_max, x_max = torch.max(object_coords, dim=0).values
     
     x_max += offset[0]
     x_min += offset[0]
     y_max += offset[1]
     y_min += offset[1]
 
-    width = x_max.item() - x_min.item()
-    height = y_max.item() - y_min.item()
+    
+    width = (x_max.item() - x_min.item())+1
+    height = (y_max.item() - y_min.item())+1
 
     return (x_min.item(), y_min.item(), width, height)
 
-def nms(predictions, iou_thresh):
+def nms(predictions, iou_thresh, task):
     # NMS
-    ordered_pred = sorted(predictions, key=lambda x:x["score"], reverse=True)
+    if task == "instance":
+        ordered_pred = sorted(predictions, key=lambda x:x["score"], reverse=True)
+    elif task == "semantic":
+        ordered_pred = predictions
     keep = []
 
     print(f"{len(ordered_pred)} objects extracted")
@@ -121,14 +125,11 @@ def nms(predictions, iou_thresh):
     print(f"{len(keep)} objects after NMS")
     return keep
 
-def run_sliding_winows_over_image(img_path, model, processor, step_size, conf_thresh):
+def run_sliding_windows_over_image(img_path, model, processor, step_size, conf_thresh, pixel_thresh, task="instance"):
     image = skimage.io.imread(img_path)
 
-    mean = image.mean(axis=(0,1))
-    std = image.std(axis=(0,1))
-
     # Image dimensions
-    img_height, img_width = image.shape[:2]
+    img_width, img_height = image.shape[:2]
 
     # Window size
     window_height, window_width = 256, 256
@@ -146,11 +147,14 @@ def run_sliding_winows_over_image(img_path, model, processor, step_size, conf_th
     inference_mode(model)
     
     # Create sliding windows over the image
-    for (x, y, window) in sliding_window(image, (window_height, window_width), (step_height, step_width)):
+    for (x, y, window) in sliding_window(image, (window_width, window_height), (step_width, step_height)):
         # print(f"Window position: x={x}, y={y}, Window shape: {window.shape}")
+        mean = window.mean(axis=(0,1))
+        std = window.std(axis=(0,1))
+        
         encoded_inputs = processor(
-            images=image[x:window_width+x, y:window_height+y],
-            task_inputs=["instance"],
+            images=window,
+            task_inputs=[task],
             return_tensors="pt",
             image_mean=mean, 
             image_std=std
@@ -160,25 +164,32 @@ def run_sliding_winows_over_image(img_path, model, processor, step_size, conf_th
 
         with torch.no_grad():
             outputs = model(**input)
-        pred_inst = processor.post_process_instance_segmentation(outputs, target_sizes=[(256,256) for _ in range(outputs.masks_queries_logits.shape[0])])
-        converted = segments_to_label(pred_inst)
         
-        label_ids = converted.unique()[converted.unique() != 0]
-        if len(label_ids) == 0:
-            continue
-        else:
-            # Else pick highest scoring
-            scores = [(retrieve_conf_score(pred_inst[0], label), label) for label in label_ids]
-            scores.sort(key=lambda x:x[1])
+        if task == "instance":
+            pred_inst = processor.post_process_instance_segmentation(outputs, overlap_mask_area_threshold=0.5, target_sizes=[(256,256) for _ in range(outputs.masks_queries_logits.shape[0])])
+            converted = segments_to_label(pred_inst)
+            
+            label_ids = converted.unique()[converted.unique() != 0]
+            if len(label_ids) == 0:
+                continue
+            else:
+                # Else pick highest scoring
+                scores = [(retrieve_conf_score(pred_inst[0], label), label) for label in label_ids]
+                scores.sort(key=lambda x:x[1])
 
-            label_id = scores[0][1].item()
+                label_id = scores[0][1].item()
 
-            predictions.append({"pos": (x,y), "mask": converted, "score": scores[0][0]})
-    
+                if scores[0][0] >= conf_thresh and converted[converted != 0].sum() > pixel_thresh:
+                    predictions.append({"pos": (x,y), "mask": converted, "score": scores[0][0]})
+        elif task == "semantic":
+            pred_mask = torch.stack(processor.post_process_semantic_segmentation(outputs, target_sizes=[(256,256) for _  in range(outputs.masks_queries_logits.shape[0])]))
+
+            if pred_mask[pred_mask != 0].sum() > pixel_thresh:
+                predictions.append({"pos": (x,y), "mask": pred_mask})
+
     print(f"{len(predictions)} objects detected")
-    print(f"Filtering by score...")
+
     # Filter by confidence score
-    predictions = [pred for pred in predictions if pred["score"] >= conf_thresh]
     return predictions
 
 def process_image(img_path, model, processor, step_size= 4, conf_thresh=0.5, iou_thresh=0.5):
@@ -189,7 +200,7 @@ def process_image(img_path, model, processor, step_size= 4, conf_thresh=0.5, iou
         Finally a nms steps is performed to discard similar predictions.
     """
     
-    predictions = run_sliding_winows_over_image(img_path, model, processor, step_size, conf_thresh)
+    predictions = run_sliding_windows_over_image(img_path, model, processor, step_size, conf_thresh)
     return nms(predictions, iou_thresh)
 
 def bb_intersection_over_union(boxA, boxB):
@@ -221,16 +232,17 @@ def retrieve_conf_score(pred_inst, label_id):
             return s["score"]
 
 def segments_to_label(predicted):
-    converted = torch.zeros((len(predicted), 256, 256))
+    w = predicted[0]["segmentation"].shape[0]
+    h = predicted[0]["segmentation"].shape[1]
+    converted = torch.zeros((len(predicted), w,h))
     for index, el in enumerate(predicted):
         for segment in el["segments_info"]:
             converted[index, el["segmentation"] == segment["id"]] = segment["label_id"]
     return converted
 
 def collect_predictions(dataset, model, processor):
-    prev_task = dataset.task
-    dataset.task = ["instance"]
-    test_dataloader = DataLoader(dataset, batch_size=4, shuffle=False)
+    batch_size = 4
+    test_dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     model.to("cuda")
     inference_mode(model)
 
@@ -243,6 +255,7 @@ def collect_predictions(dataset, model, processor):
         5: []
     }
 
+    print(f"Using task {dataset.task}")
     for batch_idx, batch in enumerate(test_dataloader):
         gt_mask = dataset.get_gt_mask(batch)
 
@@ -251,14 +264,15 @@ def collect_predictions(dataset, model, processor):
         with torch.no_grad():
             outputs = model(**batch)
 
-        pred_inst = processor.post_process_instance_segmentation(outputs, target_sizes=[(256,256) for _ in range(outputs.masks_queries_logits.shape[0])])
+        pred_inst = processor.post_process_instance_segmentation(outputs, overlap_mask_area_threshold=0.5, target_sizes=[(256,256) for _ in range(outputs.masks_queries_logits.shape[0])])
         converted = segments_to_label(pred_inst)
         
-        for i in range(converted.shape[0]):
+        for i in range(batch_size):
             # Find the label of the highest scoring result, excluding the background class
             label_ids = converted[i].unique()[converted[i].unique() != 0]
             if len(label_ids) == 0:
                 # Set to empty result if nothing was found
+                label_id = gt_mask[i][gt_mask[i]!=0].unique().item()
                 per_class_pred[label_id].append({"segmentation": torch.zeros((256, 256)),
                                             "gt_mask": gt_mask[i],
                                             "conf": 0.0})
@@ -272,8 +286,6 @@ def collect_predictions(dataset, model, processor):
                                             "gt_mask": gt_mask[i],
                                             "conf": retrieve_conf_score(pred_inst[i], label_id)})
     
-    # Reset task
-    dataset.task = prev_task
     return per_class_pred
 
 def compute_ap(predictions, threshold):
@@ -305,9 +317,10 @@ def compute_ap(predictions, threshold):
 
             precisions[cls_id].append(precision)
             recalls[cls_id].append(recall)
+            # print(f"{cls_id} | {iou}")
 
     # compute average precision for each class
-    ap = {
+    per_class_ap = {
         1: 0,
         2: 0,
         3: 0,
@@ -315,7 +328,7 @@ def compute_ap(predictions, threshold):
         5: 0
     }
 
-    for cls_id in ap.keys():
+    for cls_id in per_class_ap.keys():
         recall_levels = [i / 10 for i in range(11)]
         interpolated_precisions = []
         
@@ -329,14 +342,18 @@ def compute_ap(predictions, threshold):
             interpolated_precisions.append(max_precision)
         
         # Compute average of the interpolated precisions
-        ap[cls_id] = sum(interpolated_precisions) / len(recall_levels)   
+        per_class_ap[cls_id] = sum(interpolated_precisions) / len(recall_levels)   
 
-    return ap
+    return per_class_ap
 
 
-def compute_meanap(model, processor, dataset):
+def compute_meanap(model, processor, dataset, verbose=False):
+    prev_task = dataset.task
+    dataset.set_task("instance")
     # Run the model over the dataset and collect all the predictions divided by class
     per_class_pred = collect_predictions(dataset, model, processor)
+
+    dataset.set_task(prev_task)
 
     # Sort inplace each class dictionary by confidence score
     for k, v in per_class_pred.items():
@@ -352,15 +369,22 @@ def compute_meanap(model, processor, dataset):
 
     # meanAP over different threshold levels
     threshold_levels = np.arange(0.5, 1, 0.05)
+    if verbose:
+        print("Threshold | per_class_AP")
     for threshold in threshold_levels:
-        ap = compute_ap(per_class_pred, threshold)    
+        per_class_ap = compute_ap(per_class_pred, threshold)
+        if verbose:
+            print(f"{threshold:.2f} | {per_class_ap}")
         for cls_id in cumulated_ap.keys():
-            cumulated_ap[cls_id] += ap[cls_id]
+            cumulated_ap[cls_id] += per_class_ap[cls_id]
 
     # compute mean over thresholds
     for cls_id in cumulated_ap.keys():
         cumulated_ap[cls_id] = cumulated_ap[cls_id] / len(threshold_levels)
 
+    if verbose:
+        print("\nper_class_AP over thresholds")
+        print(cumulated_ap)
     # compute final mAP
     mAP = sum(cumulated_ap.values()) / len(cumulated_ap) 
 
@@ -390,7 +414,10 @@ def compute_metrics(dataset, model, processor, num_classes, device="cuda"):
     running_acc = 0.0
     confusion_matrix = torch.zeros(num_classes, num_classes).to("cuda")
 
+    prev_task = dataset.task
+    dataset.set_task("semantic")
 
+    print(f"Using task {dataset.task}")
     for batch_idx, batch in enumerate(test_dataloader):
         # print(f"Iteration n. {batch_idx+1} / {len(test_dataloader)}", end="\r")
         gt_mask = dataset.get_gt_mask(batch)
@@ -423,6 +450,8 @@ def compute_metrics(dataset, model, processor, num_classes, device="cuda"):
             else:
                 confusion_matrix[t.long().item(), p.long().item()] += 1
 
+    dataset.set_task(prev_task)
+
     return running_iou, running_dice, running_acc, confusion_matrix
 
 
@@ -441,6 +470,41 @@ def get_id2label_mappings():
     label2id = {v:k for k,v in id2label.items()}
 
     return id2label, label2id
+
+def run_model_on_image(model, processor, path, conditioning):
+    image = skimage.io.imread(path)
+
+    mean = image.mean(axis=(0,1))
+    std = image.std(axis=(0,1))
+
+    # Image dimensions
+    img_height, img_width = image.shape[:2]
+
+
+    predictions = []
+
+    model.to("cuda")
+    inference_mode(model)
+
+    encoded_inputs = processor(
+        images=image,
+        task_inputs=[conditioning],
+        return_tensors="pt",
+        image_mean=mean, 
+        image_std=std
+    )    
+
+    input = {k:v.to("cuda") for k,v in encoded_inputs.items()}
+
+    with torch.no_grad():
+        outputs = model(**input)
+    
+    if conditioning == "semantic":
+        return torch.stack(processor.post_process_semantic_segmentation(outputs, target_sizes=[image.shape[:2] for _ in range(outputs.masks_queries_logits.shape[0])]))
+    elif conditioning == "instance":
+        pred_inst = processor.post_process_instance_segmentation(outputs, overlap_mask_area_threshold=0.5, target_sizes=[image.shape[:2] for _ in range(outputs.masks_queries_logits.shape[0])])
+        converted = segments_to_label(pred_inst)
+        return converted
 
 class WarmupPolyLR(LRScheduler):
     def __init__(

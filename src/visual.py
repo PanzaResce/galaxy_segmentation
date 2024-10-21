@@ -1,16 +1,20 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from utils import inference_mode, segments_to_label
+# from src.utils import inference_mode, segments_to_label
+from torch.utils.data import DataLoader
 from matplotlib.patches import Patch
 
 def plot_distribution(distributions, labels):
     fig, axs = plt.subplots(1, len(distributions))
-    fig.set_size_inches(15, 5)
+    fig.set_size_inches(20, 5)
     for distribution, label, axis in zip(distributions, labels, axs):
-        key_labels = [el.split(" ")[-1] for el in distribution.keys()]
-        axis.bar(key_labels, distribution.values())
+        sorted_distr = distribution.most_common()
+        key_labels = [el[0] for el in sorted_distr]
+        values = [el[1] for el in sorted_distr]
+        axis.bar(key_labels, values)
         axis.set_title(label)
-    plt.xlabel('Class')
     plt.ylabel('Frequency')
     plt.show()
 
@@ -91,12 +95,15 @@ def mask_gt_overlap(gt_mask, pred_mask, id2label):
     rgb[0, :,:] = torch.logical_and(gt_mask, torch.logical_not(pred_mask.cpu()))
     rgb[2, :,:] = torch.logical_and(pred_mask.cpu(), torch.logical_not(gt_mask))
 
-    plt.figure(figsize=(6, 6))
-    plt.imshow(rgb.permute(1,2,0))
-    plt.title('Overlay of Ground Truth and Prediction Masks')
+    # plt.figure(figsize=(6, 6))
+    # plt.imshow(rgb.permute(1,2,0))
+    # plt.title('Overlay of Ground Truth and Prediction Masks')
     
     gt_class = id2label[gt_mask[gt_mask != 0].unique().item()]
-    pred_class = id2label[pred_mask[pred_mask != 0].unique().item()]
+    if len(pred_mask.unique()) > 1:
+        pred_class = id2label[pred_mask[pred_mask != 0].unique().item()]
+    else:
+        pred_class = None
 
     legend_elements = [
         Patch(facecolor='red', edgecolor='r', label='Ground Truth Only'),
@@ -106,9 +113,33 @@ def mask_gt_overlap(gt_mask, pred_mask, id2label):
         Patch(fill=False, edgecolor='none', label=f'Predicted: {pred_class}')
     ]
 
-    plt.legend(handles=legend_elements, loc='upper right', fontsize='x-small')
-    plt.axis('off')  
-    plt.show()
+    return rgb.permute(1,2,0), legend_elements
+    # plt.legend(handles=legend_elements, loc='upper right', fontsize='x-small')
+    # plt.axis('off')  
+    # plt.show()
+
+def random_get_instance_masks(dataset, model, processor, id2label):
+    prev_task = dataset.task
+    dataset.set_task("instance")
+    test_dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+    model.to("cuda")
+    inference_mode(model)
+
+    print(f"Using task {dataset.task}")
+    for batch_idx, batch in enumerate(test_dataloader):
+        gt_mask = dataset.get_gt_mask(batch)
+
+        batch.pop("mask_labels", None)
+        batch = {k:v.to("cuda") for k,v in batch.items()}
+        with torch.no_grad():
+            outputs = model(**batch)
+
+        pred_inst = processor.post_process_instance_segmentation(outputs, overlap_mask_area_threshold=0.5, target_sizes=[(256,256) for _ in range(outputs.masks_queries_logits.shape[0])])
+        converted = segments_to_label(pred_inst)
+        break
+
+    mask_gt_overlap(gt_mask, converted, id2label)
+    dataset.set_task(prev_task)
 
 def show_confusion_matrix(confusion_matrix, id2label):
     # Convert tensor to numpy array for processing
@@ -151,3 +182,52 @@ def show_confusion_matrix(confusion_matrix, id2label):
     plt.title('Confusion Matrix with Counts and Percentages')
     plt.tight_layout()
     plt.show()
+
+def compare_models(model_1, model_2, processor, dataset_test, id2label, conditioning, model_names=("model1", "model2")):
+    bs=4
+    test_dataloader = DataLoader(dataset_test, batch_size=bs, shuffle=True)
+
+    model_1.to("cuda")
+    model_2.to("cuda")
+    inference_mode(model_1)
+    inference_mode(model_2)
+
+    running_iou = 0.0
+    running_dice = 0.0
+    running_acc = 0.0
+
+    dataset_test.set_task(conditioning)
+
+    for batch_idx, batch in enumerate(test_dataloader):
+        # print(f"Iteration n. {batch_idx+1} / {len(test_dataloader)}", end="\r")
+        gt_mask = dataset_test.get_gt_mask(batch)
+
+        batch.pop("mask_labels", None)
+        batch.pop("text_inputs", None)
+        batch = {k:v.to("cuda") for k,v in batch.items()}
+        with torch.no_grad():
+            outputs_seg = model_1(**batch)
+            outputs_seg_inst = model_2(**batch)
+
+        # pred_mask = torch.stack(processor.post_process_semantic_segmentation(outputs, target_sizes=[(256,256) for _  in range(outputs.masks_queries_logits.shape[0])]))
+        pred_inst_1 = segments_to_label(processor.post_process_instance_segmentation(outputs_seg, overlap_mask_area_threshold=0.5, target_sizes=[(256,256) for _ in range(outputs_seg.masks_queries_logits.shape[0])]))
+        pred_inst_2 = segments_to_label(processor.post_process_instance_segmentation(outputs_seg_inst, overlap_mask_area_threshold=0.5, target_sizes=[(256,256) for _ in range(outputs_seg_inst.masks_queries_logits.shape[0])]))
+        break
+    
+    # Plot comparison
+    fig, axs = plt.subplots(2, bs, figsize=(17, 6))
+
+    axs[0, 0].set_ylabel(model_names[0])
+    axs[1, 0].set_ylabel(model_names[1])
+
+    for i in range(bs):
+        overlap_1, leg_1 = mask_gt_overlap(gt_mask[i], pred_inst_1[i], id2label)
+        overlap_2, leg_2 = mask_gt_overlap(gt_mask[i], pred_inst_2[i], id2label)
+        
+        axs[0, i].imshow(overlap_1)
+        axs[0, i].legend(handles=leg_1, loc='upper right', fontsize='xx-small')
+
+        axs[1, i].imshow(overlap_2)
+        axs[1, i].legend(handles=leg_2, loc='upper right', fontsize='xx-small')
+
+    fig.suptitle(f'{conditioning} conditioning', fontsize=16)
