@@ -1,5 +1,5 @@
 # Galaxy Segmentation with OneFormer over GalaxyZoo2
-
+Universal segmentation over GalaxyZoo2
 ## Retrieve the dataset
 The file `gz2_hart16.csv` contains the galaxyzoo2 catalog where each object has a label according to the categorization used by https://arxiv.org/pdf/1308.3496v2 (Appendix A).
 
